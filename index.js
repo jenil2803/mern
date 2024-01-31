@@ -1,7 +1,7 @@
 const express = require('express');
-const mysql = require('mysql2/promise'); // Use promise version for async/await
+const mysql = require('mysql2/promise'); 
 const bodyParser = require('body-parser');
-const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const port = 3000;
@@ -26,7 +26,19 @@ app.post('/signup', async (req, res) => {
   }
 
   try {
-    const hashPass = crypto.createHash('sha256').update(password).digest('hex');
+ 
+    const connectionForCheck = await pool.getConnection();
+    try {
+      const existingUser = await connectionForCheck.query('SELECT COUNT(*) as count FROM user_details WHERE username = ?', [username]);
+      if (existingUser[0].count > 0) {
+        return res.status(409).json({ error: 'Username is already taken' });
+      }
+    } finally {
+      connectionForCheck.release();
+    }
+
+    const saltRounds = 10;
+    const hashPass = await bcrypt.hash(password, saltRounds);
 
     const newUser = {
       username,
@@ -36,8 +48,8 @@ app.post('/signup', async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
-      await connection.query('INSERT INTO new_table SET ?', newUser);
-      console.log('Inserted new record with user_id:', results.insertId);
+      const result = await connection.query('INSERT INTO user_details SET ?', newUser);
+      console.log('Inserted new record with user_id:', result[0].insertId);
       res.status(200).json({ message: 'User signed up successfully!' });
     } finally {
       connection.release();
@@ -48,6 +60,7 @@ app.post('/signup', async (req, res) => {
   }
 });
 
+
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
@@ -55,16 +68,18 @@ app.post('/login', async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
-      const [rows] = await connection.query('SELECT * FROM new_table WHERE username = ?', [username]);
+      const [rows] = await connection.query('SELECT * FROM user_details WHERE username = ?', [username]);
 
       if (rows.length === 0) {
         return res.status(401).json({ error: 'Invalid username or password' });
       }
 
       const storedHashedPassword = rows[0].password;
-      const inputHashedPassword = crypto.createHash('sha256').update(password).digest('hex');
 
-      if (storedHashedPassword !== inputHashedPassword) {
+      
+      const passwordMatch = await bcrypt.compare(password, storedHashedPassword);
+
+      if (!passwordMatch) {
         return res.status(401).json({ error: 'Invalid username or password' });
       }
 
